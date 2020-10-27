@@ -9,6 +9,7 @@ from .matchup import Matchup
 from .pick import Pick
 from .box_score import BoxScore
 from .box_player import BoxPlayer
+from .free_agent_auction_bid import FreeAgentAuctionBid
 from .player import Player
 from .activity import Activity
 from .utils import power_points, two_step_dominance
@@ -143,6 +144,100 @@ class League(BaseLeague):
             if team_id == team.team_id:
                 return team
         return None
+
+    def get_free_agent_auction_bids(self, week: int = None) -> List[FreeAgentAuctionBid]:
+        '''Returns a list of free agent auction bids'''
+        if not week:
+            week = self.current_week
+
+        params = {
+            'scoringPeriodId': week,
+            'view': 'mTransactions2'
+        }
+
+        filters = {"transactions": {"filterType": {"value": ["WAIVER", "WAIVER_ERROR"]}}}
+        headers = {'x-fantasy-filter': json.dumps(filters)}
+
+        # r = requests.get(self.ENDPOINT, params=params, cookies=self.cookies, headers=headers)
+        # self.status = r.status_code
+        # checkRequestStatus(self.status)
+        #
+        # data = r.json()['transactions']
+
+        data = self.espn_request.league_get(params=params, headers=headers)['transactions']
+
+        bids = [FreeAgentAuctionBid(bid, self.player_map, self.get_team_data) for bid in data]
+
+        return bids
+
+    def free_agent_auction_report(self, week: int = None) -> List[Tuple[int, str]]:
+        '''Returns a list of tuples in the form of (timestamp, human_readable_free_agent_auction_report)'''
+        if not week:
+            week = self.current_week
+        bids = self.get_free_agent_auction_bids(week)
+        # TODO: I don't know what ESPN returns if there are no waivers processed, don't have a league to test on
+        if len(bids) == 0:
+            return "There were no free agent auctions this week"
+
+
+        # remove canceled bids
+        bids = [bid for bid in bids if bid.result != 'Canceled']
+
+        # If there are multiple waiver runs in a scoring period, ESPN API returns them all at once
+        # need to determine how many waiver periods there were
+        reports = {bids[0].time: [bids[0]]}
+        for bid in bids[1:]:
+            found = False
+            for report_time in reports:
+                if bid.time == report_time:
+                    reports[report_time].append(bid)
+                    found = True
+                    break
+            if not found:
+                reports[bid.time] = [bid]
+        reports = [(time, report) for time, report in sorted(reports.items())]
+
+        reports_to_return = []
+        for report in reports:
+            time = report[0]
+            report = report[1]
+            # sort by bid amount, grab largest remaining bid, and grab all other bids on that same player
+            report.sort(reverse=True)
+            output = []
+            while len(report) > 0:
+                if report[0].result == 'Processed':
+                    temp = '${2}: {0} to {1}'.format(self.player_map[report[0].player],
+                                                     self.get_team_data(report[0].teamId).team_name,
+                                                     report[0].amount)
+                    if report[0].dropped_player:
+                        temp += ' (Dropped {})'.format(self.player_map[report[0].dropped_player])
+                    output.append(temp)
+                    other_bids = False
+                    for bid in list(report[1:]):  # iterate over copy of list, freeing us to modify the original
+                        if bid.player == report[0].player:
+                            other_bids = True
+                            temp = '    -- ${1}: {0}'.format(self.get_team_data(bid.teamId).team_name,
+                                                             bid.amount)
+                            if bid.amount > report[0].amount:
+                                temp += ' (Player already dropped)'
+                            output.append(temp)
+                            report.remove(bid)
+                    if not other_bids:
+                        output.append('    -- No other bids')
+                    output.append('')
+                else:
+                    temp = '${0} {1} to {2} not processed: Player already dropped' \
+                        .format(report[0].amount,
+                                self.player_map[report[0].player],
+                                self.get_team_data(report[0].teamId).team_name)
+                    output.append(temp)
+                    output.append('')
+                report.remove(report[0])
+
+            report_string = '\n'.join(output)
+            reports_to_return.append((time, report_string))
+        return reports_to_return
+
     
     def recent_activity(self, size: int = 25, msg_type: str = None) -> List[Activity]:
         '''Returns a list of recent league activities (Add, Drop, Trade)'''

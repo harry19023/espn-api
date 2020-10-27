@@ -10,12 +10,14 @@ class FreeAgentAuctionBid(object):
         else:
             if status == 'EXECUTED':
                 self.result = 'Processed'
+            elif status == 'FAILED_AUCTIONBUDGETEXCEEDED':
+                self.result = 'Not enough FAAB remaining'
             elif status == 'FAILED_INVALIDPLAYERSOURCE':
                 self.result = 'Outbid'
             elif status == 'FAILED_PLAYERALREADYDROPPED' or status == 'FAILED_ROSTERLIMIT':
                 self.result = 'Player already dropped'
 
-            else:
+            else:  # Useful to store the new ESPN status for debug purposes
                 self.result = status
 
             self.amount = data['bidAmount']
@@ -31,9 +33,10 @@ class FreeAgentAuctionBid(object):
     def __lt__(self, other):
         # sort by status, then bid amount
         result_ranking = {'Processed': 4,
-                          'Outbid': 3,
-                          'Player already dropped': 2,
-                          'CANCELLED': 1}
+                          'Not enough FAAB remaining': 3,
+                          'Outbid': 2,
+                          'Player already dropped': 1,
+                          'CANCELLED': 0}
         if result_ranking[self.result] != result_ranking[other.result]:
             return result_ranking[self.result] < result_ranking[other.result]
         else:

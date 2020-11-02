@@ -2,6 +2,7 @@ import datetime
 import time
 import json
 from typing import List, Tuple
+import requests
 
 from ..base_league import BaseLeague
 from .team import Team
@@ -50,11 +51,11 @@ class League(BaseLeague):
     def _fetch_draft(self):
         '''Creates list of Pick objects from the leagues draft'''
         data = self.espn_request.get_league_draft()
-        
+
         # League has not drafted yet
         if not data['draftDetail']['drafted']:
             return
-        
+
         picks = data['draftDetail']['picks']
         for pick in picks:
             team = self.get_team_data(pick['teamId'])
@@ -68,7 +69,7 @@ class League(BaseLeague):
             keeper_status = pick['keeper']
 
             self.draft.append(Pick(team, playerId, playerName, round_num, round_pick, bid_amount, keeper_status))
-    
+
     def _get_positional_ratings(self, week: int):
         params = {
             'view': 'mPositionalRatings',
@@ -102,7 +103,7 @@ class League(BaseLeague):
         team_roster = {}
         for team in data['teams']:
             team_roster[team['id']] = team['roster']
-        
+
         for team in self.teams:
             roster = team_roster[team.team_id]
             team._fetch_roster(roster, self.year)
@@ -114,7 +115,7 @@ class League(BaseLeague):
     def top_scorer(self) -> Team:
         most_pf = sorted(self.teams, key=lambda x: x.points_for, reverse=True)
         return most_pf[0]
-    
+
     def least_scorer(self) -> Team:
         least_pf = sorted(self.teams, key=lambda x: x.points_for, reverse=False)
         return least_pf[0]
@@ -130,7 +131,7 @@ class League(BaseLeague):
         top_scored_tup = [(i, j) for (i, j) in zip(self.teams, top_week_points)]
         top_tup = sorted(top_scored_tup, key=lambda tup: int(tup[1]), reverse=True)
         return top_tup[0]
-    
+
     def least_scored_week(self) -> Tuple[Team, int]:
         least_week_points = []
         for team in self.teams:
@@ -238,7 +239,7 @@ class League(BaseLeague):
             reports_to_return.append((time, report_string))
         return reports_to_return
 
-    
+
     def recent_activity(self, size: int = 25, msg_type: str = None) -> List[Activity]:
         '''Returns a list of recent league activities (Add, Drop, Trade)'''
         if self.year < 2019:
@@ -250,7 +251,7 @@ class League(BaseLeague):
         params = {
             'view': 'kona_league_communication'
         }
-        
+
         filters = {"topics":{"filterType":{"value":["ACTIVITY_TRANSACTIONS"]},"limit":size,"limitPerMessageSet":{"value":25},"offset":0,"sortMessageDate":{"sortPriority":1,"sortAsc":False},"sortFor":{"sortPriority":2,"sortAsc":False},"filterIncludeMessageTypeIds":{"value":msg_types}}}
         headers = {'x-fantasy-filter': json.dumps(filters)}
         data = self.espn_request.league_get(extend='/communication/', params=params, headers=headers)
@@ -270,7 +271,23 @@ class League(BaseLeague):
         data = self.espn_request.league_get(params=params)
 
         schedule = data['schedule']
-        matchups = [Matchup(matchup) for matchup in schedule if matchup['matchupPeriodId'] == week]
+
+        # grab the current NFL games to compute projected remaining points
+        today = datetime.datetime.today() - datetime.timedelta(hours=8)
+        today_string = today.strftime("%Y%m%d")
+        nfl_game_status_endpoint = (
+            f'https://site.api.espn.com/apis/fantasy/v2/games/ffl/games?'
+            f'useMap=true&dates={today_string}&pbpOnly=true'
+        )
+        r = requests.get(nfl_game_status_endpoint)
+        nfl_games = r.json()['events']
+        progress = {}
+        for event in nfl_games:
+            pct_complete = event['percentComplete'] / 100
+            for team in event['competitors']:
+                progress[team['id']] = pct_complete
+
+        matchups = [Matchup(matchup, progress) for matchup in schedule if matchup['matchupPeriodId'] == week]
 
         for team in self.teams:
             for matchup in matchups:
@@ -278,7 +295,7 @@ class League(BaseLeague):
                     matchup.home_team = team
                 elif matchup.away_team == team.team_id:
                     matchup.away_team = team
-        
+
         return matchups
 
     def box_scores(self, week: int = None) -> List[BoxScore]:
@@ -293,7 +310,7 @@ class League(BaseLeague):
             'view': ['mMatchupScore', 'mScoreboard'],
             'scoringPeriodId': week,
         }
-        
+
         filters = {"schedule":{"filterMatchupPeriodIds":{"value":[week]}}}
         headers = {'x-fantasy-filter': json.dumps(filters)}
         data = self.espn_request.league_get(params=params, headers=headers)
@@ -310,7 +327,7 @@ class League(BaseLeague):
                 elif matchup.away_team == team.team_id:
                     matchup.away_team = team
         return box_data
-        
+
     def power_rankings(self, week: int=None):
         '''Return power rankings for any week'''
 
@@ -322,7 +339,7 @@ class League(BaseLeague):
                               reverse=False)
 
         for team in teams_sorted:
-            wins = [0]*len(teams_sorted) 
+            wins = [0]*len(teams_sorted)
             for mov, opponent in zip(team.mov[:week], team.schedule[:week]):
                 opp = teams_sorted.index(opponent)
                 if mov > 0:
@@ -340,14 +357,14 @@ class League(BaseLeague):
             raise Exception('Cant use free agents before 2019')
         if not week:
             week = self.current_week
-        
+
         slot_filter = []
         if position and position in POSITION_MAP:
             slot_filter = [POSITION_MAP[position]]
         if position_id:
             slot_filter.append(position_id)
 
-        
+
         params = {
             'view': 'kona_player_info',
             'scoringPeriodId': week,
@@ -375,7 +392,7 @@ class League(BaseLeague):
         headers = {'x-fantasy-filter': json.dumps(filters)}
 
         data = self.espn_request.league_get(params=params, headers=headers)
-        
+
         if len(data['players']) > 0:
             return Player(data['players'][0], self.year)
 

@@ -12,4 +12,5 @@ venv/
 build
 dist
 env
-coverage*
+coverage
+*.DS_Store

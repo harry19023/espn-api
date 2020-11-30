@@ -279,7 +279,8 @@ class League(BaseLeague):
             f'https://site.api.espn.com/apis/fantasy/v2/games/ffl/games?'
             f'useMap=true&dates={today_string}&pbpOnly=true'
         )
-        r = requests.get(nfl_game_status_endpoint)
+        headers = {'Cache-Control': 'no-cache'}
+        r = requests.get(nfl_game_status_endpoint, headers=headers)
         nfl_games = r.json()['events']
         progress = {}
         for event in nfl_games:
